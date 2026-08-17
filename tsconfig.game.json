@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["next-env.d.ts", ".next/types/**/*.ts", "app/page.tsx", "app/layout.tsx", "github-src/**/*.tsx", "vite.github.config.ts"],
+  "include": ["next-env.d.ts", ".next/types/**/*.ts", "app/page.tsx", "app/layout.tsx", "app/game/**/*.ts", "app/game/**/*.tsx", "github-src/**/*.tsx", "vite.github.config.ts"],
   "exclude": ["db", "worker", "drizzle", "examples", "dist", "docs", "node_modules"]
 }

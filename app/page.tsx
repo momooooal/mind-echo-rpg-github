@@ -1,564 +1,236 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
+import { DialogueBox } from "./game/components/DialogueBox";
+import { GameScene, type SceneObject } from "./game/components/GameScene";
+import { MemoryBook } from "./game/components/MemoryBook";
+import { PauseMenu } from "./game/components/PauseMenu";
+import { StatusSignals } from "./game/components/StatusSignals";
+import { CHILDHOOD_OBJECTS, CLINIC_TIMELINE, FUTURE_CHAPTERS, TEEN_EVENTS } from "./game/data/events";
+import { getFamilySeed } from "./game/data/families";
+import { createHomeState, freshSeed } from "./game/engine/createGame";
+import { gameReducer } from "./game/engine/reducer";
+import type { AccessibilitySettings, Phase, TeenPattern } from "./game/types";
 
-type Step =
-  | "home" | "notice" | "birth" | "room" | "family" | "school"
-  | "path" | "clinic" | "day" | "work" | "care" | "group"
-  | "plan" | "legacy" | "ending";
+const SAVE_KEY = "echo-life-rpg-save-v2";
 
-type PathKey = "mood" | "attention" | "perception" | "trauma";
-type Stats = { energy: number; safety: number; connection: number; support: number };
-type Delta = Partial<Stats>;
-type Feedback = { title: string; body: string; next: Step } | null;
-
-const SAVE_KEY = "echo-life-rpg-save-v1";
-const INITIAL_STATS: Stats = { energy: 56, safety: 44, connection: 48, support: 18 };
-
-const ages = [
-  { step: "birth", age: "00" }, { step: "room", age: "07" },
-  { step: "school", age: "12" }, { step: "path", age: "17" },
-  { step: "day", age: "26" }, { step: "work", age: "33" },
-  { step: "care", age: "45" }, { step: "group", age: "57" },
-  { step: "plan", age: "68" }, { step: "legacy", age: "82" },
+const LIFE_STAGES = [
+  ["0–5", ["notice", "birth"]],
+  ["6–12", ["childhood-room", "family-talk", "school-morning"]],
+  ["13–18", ["ordinary-day", "teen-event", "wrong-explanation", "counselor", "clinic-trip", "clinic-room", "memory-return"]],
+  ["19–25", []], ["26–35", []], ["36–50", []], ["51–65", []], ["65+", []],
 ] as const;
 
-const stepIndex: Record<Step, number> = {
-  home: -1, notice: -1, birth: 0, room: 1, family: 1, school: 2,
-  path: 3, clinic: 3, day: 4, work: 5, care: 6, group: 7,
-  plan: 8, legacy: 9, ending: 10,
+const DISTRACTIONS = [
+  ["boss", "班導", "昨天那張回條呢？"],
+  ["group", "班群 · 27", "有人又把老師做成梗圖"],
+  ["washer", "洗衣機", "嗶、嗶、嗶——"],
+  ["video", "短影片", "再看一個就好"],
+  ["alarm", "鬧鐘", "07:34　稍後提醒"],
+  ["weather", "天氣", "下午降雨 70%"],
+  ["thought", "腦袋", "等一下，我是不是還沒——"],
+] as const;
+
+const SURGE_TASKS = [
+  ["project", "開一個新企劃", "先把資料夾建好，名字很酷。"],
+  ["room", "整理整個房間", "凌晨一點，衣櫃全部倒在床上。"],
+  ["slides", "做四十頁簡報", "明明只需要十分鐘報告。"],
+  ["shop", "買三支不同用途的筆", "還順便加入購物車七樣東西。"],
+  ["messages", "回完所有人的訊息", "又答應兩個週末邀約。"],
+  ["course", "報名線上課程", "這次一定可以學會。"],
+  ["trip", "規劃一趟旅行", "票價、住宿、景點同時開著。"],
+] as const;
+
+const PATTERN_COPY: Record<TeenPattern, { kicker: string; title: string; intro: string; rationalization: string; thought: string }> = {
+  surge: { kicker: "16 歲 · 星期三 · 23:08", title: "今晚什麼都做得到", intro: "滑鼠移動得比平常快。每完成一件事，又會想到三件更好的事。", rationalization: "你最近很有效率啊。年輕人少睡一點沒差吧？", thought: "前幾天真的很厲害。可是今天連制服都換不下來。" },
+  low: { kicker: "16 歲 · 星期一 · 06:58", title: "只是一件很小的事", intro: "今天要洗澡、回老師一封信、去學校。每件事都只有一個按鈕。", rationalization: "大家都不想上學啊。不要把懶惰想得那麼嚴重。", thought: "對啊，只是一封信。我也不知道為什麼沒有辦法。" },
+  perception: { kicker: "17 歲 · 車站 · 17:42", title: "每一句都要再確認一次", intro: "月台很吵。有人說話，你不確定那句話是不是和你有關。", rationalization: "你就是太在意別人怎麼看。大家根本沒空管你。", thought: "也許真的沒人在講我。可是每一次都要確認，好累。" },
+  alarm: { kicker: "15 歲 · 學校走廊 · 12:21", title: "身體比你更早聽見", intro: "午休結束，一扇門在你身後突然關上。事情只發生了一秒。", rationalization: "只是關門大聲一點。你不要每次都那麼誇張。", thought: "我知道只是一扇門。身體不知道。" },
 };
 
-const pathInfo: Record<PathKey, { label: string; short: string; detail: string; lens: string }> = {
-  mood: {
-    label: "能量像潮汐",
-    short: "有些日子快得停不下來，有些日子連起身都很重。",
-    detail: "你走過的是情緒與能量波動的路線。睡眠、衝動與低潮會影響日常，但它們不等於你整個人。",
-    lens: "今天的世界忽然很快，明天也可能重得推不動。",
-  },
-  attention: {
-    label: "注意力有很多頻道",
-    short: "你不是沒聽見，而是所有聲音都同時太大聲。",
-    detail: "你走過的是注意力與執行功能困難的路線。遲到、遺漏和啟動困難不是簡單的不用心。",
-    lens: "老師說了一句話，你的腦中卻同時開了七個視窗。",
-  },
-  perception: {
-    label: "現實偶爾起霧",
-    short: "有時很難判斷，那個聲音是從房間裡，還是心裡傳來。",
-    detail: "你走過的是知覺與現實感受擾動的路線。有這些經驗不代表暴力，也不會抹去一個人的判斷與感情。",
-    lens: "你需要花力氣確認，別人不必確認的事。",
-  },
-  trauma: {
-    label: "身體一直守夜",
-    short: "事情已經過去，警報器卻還留在身體裡。",
-    detail: "你走過的是創傷警覺的路線。閃回、迴避與過度警醒是求生系統留下的反應，不是脆弱。",
-    lens: "一個關門聲，就能讓身體先回到很多年前。",
-  },
-};
-
-const roomClues = [
-  { id: "bag", label: "白色藥袋", text: "袋上寫著『睡前、情緒穩定』。你只認得媽媽的名字。" },
-  { id: "receipts", label: "購物收據", text: "同一天的七張收據。昨晚她說，這些東西以後都用得到。" },
-  { id: "calendar", label: "月曆紅圈", text: "『回診』被圈了三次，其中一次正好是她沒來接你的那天。" },
-];
-
-const morningTasks = [
-  { id: "homework", label: "找昨天寫好的作業", note: "老師說再忘一次，就要通知家裡。" },
-  { id: "wake", label: "再叫一次還沒起床的媽媽", note: "她昨晚很晚才安靜下來。" },
-  { id: "breakfast", label: "替自己裝一份早餐", note: "肚子已經在叫，但公車剩三分鐘。" },
-  { id: "sister", label: "幫妹妹綁鞋帶", note: "她站在門口，快哭了。" },
-  { id: "breathe", label: "先停十秒，好好呼吸", note: "胸口很緊，可是沒有人在等你。" },
-  { id: "call", label: "打給阿姨求救", note: "你怕她又說：要體諒大人。" },
-];
-
-const dayTasks = [
-  { id: "shift", label: "撐完八小時班", cost: 4, delta: { energy: -8, safety: 3 } },
-  { id: "clinic", label: "搭兩班車去回診", cost: 3, delta: { energy: -3, safety: 10, support: 5 } },
-  { id: "shower", label: "洗澡與換乾淨衣服", cost: 2, delta: { energy: 2, safety: 3 } },
-  { id: "family", label: "陪家人吃晚餐", cost: 2, delta: { energy: -2, connection: 7 } },
-  { id: "group", label: "在互助群組說一句近況", cost: 1, delta: { connection: 5, support: 7 } },
-  { id: "laundry", label: "把堆三天的衣服洗完", cost: 2, delta: { energy: -3, safety: 2 } },
-];
-
-const groupReplies = [
-  { id: "safe", text: "我在。你現在安全嗎？可以只回我一個數字。", kind: "supportive" },
-  { id: "call", text: "先不要一個人。我能陪你聯絡1925，或找一位在附近的人。", kind: "supportive" },
-  { id: "stay", text: "我不知道怎麼解決，但接下來十分鐘我可以陪你。", kind: "supportive" },
-  { id: "bright", text: "不要想太多，往好處想就好了。", kind: "thin" },
-  { id: "compare", text: "至少你還有家人，比很多人幸運了。", kind: "thin" },
-  { id: "sleep", text: "快去睡一覺，醒來就沒事了。", kind: "thin" },
-];
-
-const planGroups = [
-  { id: "sign", label: "我的警訊", options: ["連續兩晚沒睡", "突然不回任何訊息", "開始分不清聲音來源"] },
-  { id: "person", label: "先找誰", options: ["懂我近況的朋友", "互助團體夥伴", "社區心理衛生中心"] },
-  { id: "wish", label: "希望怎麼陪", options: ["先聽，不急著講道理", "陪我確認用藥與回診", "降低聲音與人群刺激"] },
-  { id: "urgent", label: "需要立即協助時", options: ["打1925一起討論", "聯絡醫療院所", "有立即危險時打119或110"] },
-];
-
-const clamp = (value: number) => Math.max(0, Math.min(100, value));
-
-function AgeRail({ step }: { step: Step }) {
-  const current = stepIndex[step];
-  return (
-    <nav className="age-rail game-age-rail" aria-label="生命進度">
-      {ages.map((item, index) => (
-        <span className={index === current ? "age-now" : index < current ? "age-past" : ""} key={item.age}>
-          {item.age}{index < ages.length - 1 && <i />}
-        </span>
-      ))}
-      <span className={current >= 10 ? "age-now" : ""}>終</span>
-    </nav>
-  );
+function stageForPhase(phase: Phase) {
+  return LIFE_STAGES.findIndex(([, phases]) => (phases as readonly string[]).includes(phase));
 }
 
-function StatPanel({ stats }: { stats: Stats }) {
-  const items = [
-    ["能量", stats.energy], ["安全感", stats.safety],
-    ["連結", stats.connection], ["支持網", stats.support],
-  ] as const;
-  return (
-    <aside className="stat-panel" aria-label="目前狀態">
-      {items.map(([label, value]) => (
-        <div className="stat" key={label}>
-          <span>{label}</span><b>{value}</b>
-          <div><i style={{ width: `${value}%` }} /></div>
-        </div>
-      ))}
-      <p>這些不是生命值，也不決定輸贏。它們只是讓代價變得可見。</p>
-    </aside>
-  );
+function LifeRail({ phase }: { phase: Phase }) {
+  const current = stageForPhase(phase);
+  return <nav className="life-rail" aria-label="人生階段">{LIFE_STAGES.map(([label], index) => <span key={label} className={index === current ? "current" : index < current ? "past" : "future"}><i aria-hidden="true" />{label}</span>)}</nav>;
 }
 
-function Dialogue({ speaker, children, thought }: { speaker: string; children: React.ReactNode; thought?: string }) {
-  return (
-    <div className="dialogue-box">
-      <span>{speaker}</span>
-      <p>{children}</p>
-      {thought && <em>你沒有說出口：{thought}</em>}
-    </div>
-  );
-}
-
-function ChoiceButton({ title, detail, onClick }: { title: string; detail?: string; onClick: () => void }) {
-  return (
-    <button className="choice-button" type="button" onClick={onClick}>
-      <strong>{title}</strong>{detail && <span>{detail}</span>}<i aria-hidden="true">→</i>
-    </button>
-  );
+function SceneHeading({ kicker, title, children }: { kicker: string; title: string; children: React.ReactNode }) {
+  return <header className="scene-heading"><p>{kicker}</p><h1>{title}</h1><div>{children}</div></header>;
 }
 
 export default function Home() {
-  const [step, setStep] = useState<Step>("home");
-  const [stats, setStats] = useState<Stats>(INITIAL_STATS);
-  const [path, setPath] = useState<PathKey | null>(null);
-  const [clues, setClues] = useState<string[]>([]);
-  const [morning, setMorning] = useState<string[]>([]);
-  const [selectedTasks, setSelectedTasks] = useState<string[]>([]);
-  const [replies, setReplies] = useState<string[]>([]);
-  const [plan, setPlan] = useState<Record<string, string>>({});
-  const [legacy, setLegacy] = useState("");
-  const [feedback, setFeedback] = useState<Feedback>(null);
-  const [log, setLog] = useState<string[]>([]);
-  const [paused, setPaused] = useState(false);
-  const [softMode, setSoftMode] = useState(false);
-  const [hasSave, setHasSave] = useState(false);
+  const [state, dispatch] = useReducer(gameReducer, undefined, createHomeState);
   const [ready, setReady] = useState(false);
+  const [hasSave, setHasSave] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  const [doorPrompt, setDoorPrompt] = useState(false);
+  const family = useMemo(() => getFamilySeed(state.familyId), [state.familyId]);
 
   useEffect(() => {
-    // Hydration is the first moment browser storage is available.
+    // Browser storage is intentionally device-local; the game sends no player data elsewhere.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setHasSave(Boolean(window.localStorage.getItem(SAVE_KEY)));
     setReady(true);
   }, []);
 
   useEffect(() => {
-    if (!ready || step === "home" || step === "ending") return;
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-      step, stats, path, clues, morning, selectedTasks, replies, plan, legacy, log, softMode,
-    }));
-    // Keep the home-screen resume affordance in sync with the browser save.
+    if (!ready || state.phase === "home") return;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(state));
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setHasSave(true);
-  }, [step, stats, path, clues, morning, selectedTasks, replies, plan, legacy, log, softMode, ready]);
+  }, [ready, state]);
 
-  const currentAge = useMemo(() => {
-    const index = stepIndex[step];
-    return index >= 0 && index < ages.length ? ages[index].age : "";
-  }, [step]);
-
-  const updateStats = (delta: Delta) => setStats((old) => ({
-    energy: clamp(old.energy + (delta.energy ?? 0)),
-    safety: clamp(old.safety + (delta.safety ?? 0)),
-    connection: clamp(old.connection + (delta.connection ?? 0)),
-    support: clamp(old.support + (delta.support ?? 0)),
-  }));
-
-  const go = (next: Step) => {
-    setFeedback(null);
-    setStep(next);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  const go = (phase: Phase, age?: number, text?: string) => {
+    dispatch({ type: "GO", phase, age, text });
+    window.scrollTo({ top: 0, behavior: state.settings.reducedDistractions ? "auto" : "smooth" });
   };
 
-  const choose = (label: string, delta: Delta, title: string, body: string, next: Step) => {
-    updateStats(delta);
-    setLog((old) => [...old, label]);
-    setFeedback({ title, body, next });
+  const newLife = () => {
+    window.localStorage.removeItem(SAVE_KEY);
+    dispatch({ type: "NEW_LIFE", seed: freshSeed(), settings: state.settings });
+    setHasSave(false);
   };
 
-  const newGame = () => {
-    setStats(INITIAL_STATS); setPath(null); setClues([]); setMorning([]);
-    setSelectedTasks([]); setReplies([]); setPlan({}); setLegacy("");
-    setFeedback(null); setLog([]); setSoftMode(false);
-    window.localStorage.removeItem(SAVE_KEY); setHasSave(false); go("notice");
-  };
-
-  const resumeGame = () => {
+  const resume = () => {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(SAVE_KEY) ?? "{}");
-      setStats(saved.stats ?? INITIAL_STATS); setPath(saved.path ?? null);
-      setClues(saved.clues ?? []); setMorning(saved.morning ?? []);
-      setSelectedTasks(saved.selectedTasks ?? []); setReplies(saved.replies ?? []);
-      setPlan(saved.plan ?? {}); setLegacy(saved.legacy ?? ""); setLog(saved.log ?? []);
-      setSoftMode(saved.softMode ?? false); go(saved.step ?? "notice");
-    } catch { newGame(); }
+      const saved = JSON.parse(window.localStorage.getItem(SAVE_KEY) ?? "") as typeof state;
+      if (saved.version !== 2) throw new Error("old save");
+      dispatch({ type: "HYDRATE", state: saved });
+    } catch { newLife(); }
   };
 
-  const completeMorning = () => {
-    const caredForSelf = morning.includes("breakfast") || morning.includes("breathe");
-    const askedHelp = morning.includes("call");
-    updateStats({ energy: caredForSelf ? 4 : -7, safety: caredForSelf ? 5 : -3, support: askedHelp ? 7 : 0, connection: morning.includes("sister") ? 4 : 0 });
-    setLog((old) => [...old, `十二歲的早晨選了：${morning.map((id) => morningTasks.find((x) => x.id === id)?.label).join("、")}`]);
-    setFeedback({
-      title: "你只能帶走三件事。",
-      body: caredForSelf
-        ? "你替自己留了一點位置。公車仍然差點錯過，但身體記得：你也算一個需要被照顧的人。"
-        : "你讓每個人都勉強出門了，只有自己空著肚子。旁人只看到你又遲到，沒看到這個早晨有多少工作。",
-      next: "path",
-    });
-  };
+  const setSetting = (key: keyof AccessibilitySettings, value: boolean) => dispatch({ type: "SET_SETTING", key, value });
 
-  const energyUsed = selectedTasks.reduce((sum, id) => sum + (dayTasks.find((task) => task.id === id)?.cost ?? 0), 0);
-  const completeDay = () => {
-    const delta: Delta = {};
-    selectedTasks.forEach((id) => {
-      const item = dayTasks.find((task) => task.id === id);
-      if (!item) return;
-      (Object.keys(item.delta) as (keyof Stats)[]).forEach((key) => { delta[key] = (delta[key] ?? 0) + (item.delta[key] ?? 0); });
-    });
-    if (!selectedTasks.includes("clinic")) delta.safety = (delta.safety ?? 0) - 5;
-    updateStats(delta);
-    setLog((old) => [...old, `二十六歲把有限能量用在：${selectedTasks.map((id) => dayTasks.find((x) => x.id === id)?.label).join("、")}`]);
-    setFeedback({
-      title: "晚上十點，清單還是沒有清空。",
-      body: selectedTasks.includes("clinic")
-        ? "回診花掉半天，你卻保住了接下來幾週的一點穩定。沒完成的家務不代表你失敗。"
-        : "你完成了眼前的事情，回診通知仍留在手機裡。這不是不在乎健康；有時資源本身也需要能量才能抵達。",
-      next: "work",
-    });
-  };
-
-  const completeGroup = () => {
-    const supportive = replies.filter((id) => groupReplies.find((item) => item.id === id)?.kind === "supportive").length;
-    updateStats({ connection: supportive * 5, support: supportive * 7, energy: -2 });
-    setLog((old) => [...old, "五十七歲，在群組裡選擇留下來陪一個人。"]) ;
-    setFeedback({
-      title: supportive === 2 ? "你沒有修好對方的人生。你陪他撐過了這十分鐘。" : "好意也可能讓人更孤單。",
-      body: supportive === 2
-        ? "支持往往不是漂亮答案，而是確認安全、連結現實中的人，並且不讓對方獨自等待專業協助。"
-        : "『想開一點』聽起來積極，卻可能把困難推回對方身上。你還有機會學會另一種陪伴。",
-      next: "plan",
-    });
-  };
-
-  const finishLife = (item: string) => {
-    setLegacy(item); setLog((old) => [...old, `八十二歲留下：${item}`]);
-    window.localStorage.removeItem(SAVE_KEY); setHasSave(false); go("ending");
-  };
-
-  const sceneHeader = (kicker: string, title: string, intro: string) => (
-    <header className="scene-heading">
-      <p>{kicker}</p><h1>{title}</h1><div>{intro}</div>
-    </header>
-  );
-
-  const feedbackCard = feedback && (
-    <div className="feedback-card" role="status" aria-live="polite">
-      <p>選擇之後</p><h3>{feedback.title}</h3><div>{feedback.body}</div>
-      <button type="button" onClick={() => go(feedback.next)}>讓時間繼續 <span aria-hidden="true">→</span></button>
-    </div>
-  );
-
-  if (step === "home") {
-    return (
-      <main className="site-shell home-shell">
-        <header className="topbar">
-          <div className="brand-mark" aria-hidden="true">回</div>
-          <p>一款關於看不見的日常、選擇與陪伴的生命 RPG</p>
-          <a className="quiet-link" href="#about">關於作品</a>
-        </header>
-        <section className="hero" aria-labelledby="game-title">
-          <div className="age-rail home-age-rail" aria-label="人生階段">
-            <span className="active">00</span><i /><span>07</span><i /><span>17</span><i /><span>26</span><i /><span>45</span><i /><span>68</span><i /><span>終</span>
-          </div>
-          <div className="hero-copy">
-            <p className="eyebrow">你不會得到完美選項</p>
-            <h1 id="game-title">一生的<br /><em>回聲</em></h1>
-            <p className="lede">從還不懂「生病」是什麼的七歲開始，走過家裡沒說出口的秘密、校園裡的標籤、藥盒與打卡鐘，直到生命最後一個普通的下午。</p>
-            <div className="actions">
-              <button className="primary-button" type="button" onClick={newGame}>開始這一生 <span aria-hidden="true">→</span></button>
-              {hasSave && <button className="resume-button" type="button" onClick={resumeGame}>繼續上次進度</button>}
-            </div>
-          </div>
-          <div className="room-stage hero-room" aria-label="一間深夜仍亮著燈的客廳插畫">
-            <div className="window"><span /><span /><span /></div><div className="lamp"><b /></div>
-            <div className="sofa"><span /></div><div className="small-table"><i /><b /><em /></div>
-            <div className="child"><span /><b /></div><p>02:13<br /><span>客廳</span></p>
-          </div>
-        </section>
-        <section className="about-strip" id="about">
-          <p>遊玩時間約 12–18 分鐘</p><p>沒有輸贏，只有不同代價</p>
-          <p>由支持團體的共同生命經驗啟發；角色、對話與事件均已去識別化並重新編寫</p>
-        </section>
-      </main>
-    );
+  if (state.phase === "home") {
+    return <main className="landing">
+      <header className="landing-bar"><div className="logo-tile">回</div><p>人生模擬 × 養成 RPG × 敘事解謎</p><a href="#about">這是什麼</a></header>
+      <section className="landing-hero">
+        <div className="landing-copy"><span className="tape-label">可遊玩章節 · 0–18 歲</span><h1>一生的<br /><em>回聲</em></h1><p>你不是要扮演一個精神疾病患者。你只是活著，後來才慢慢知道，原來有些事情別人不用這麼用力。</p><div className="landing-actions"><button type="button" className="main-action" onClick={newLife}>出生</button>{hasSave && <button type="button" onClick={resume}>回到上次停下的地方</button>}</div><small>一輪約 20–30 分鐘 · 沒有疾病選單 · 沒有好壞結局</small></div>
+        <div className="landing-room" aria-hidden="true"><div className="pixel-window"><i /><i /><i /></div><div className="room-lamp" /><div className="room-sofa" /><div className="room-table"><i /><b /></div><div className="tiny-person" /><span className="clock-card">02:13<br /><small>客廳還亮著</small></span><span className="receipt-card">○○身心○○<br />第 071 號</span><span className="note-card">不要跟老師說</span></div>
+      </section>
+      <section className="landing-about" id="about"><article><span>你會做的事</span><p>翻垃圾桶、找聯絡簿、忘記鑰匙、按三次才起床、在候診室看號碼，以及把想說的話刪掉。</p></article><article><span>這一輪不會告訴你</span><p>你「抽到」什麼病。家庭、睡眠、壓力、先天敏感與偶發事件會在看不見的地方互相影響。</p></article><article><span>資料界線</span><p>角色與事件皆為融合後重新創作；沒有真實群名、成員、病歷、原句或可辨識經歷。</p></article></section>
+    </main>;
   }
 
-  return (
-    <main className={`game-shell step-${step} ${softMode ? "soft-mode" : ""}`}>
-      <header className="game-topbar">
-        <button className="mini-brand" type="button" onClick={() => setPaused(true)} aria-label="開啟暫停與協助選單">回</button>
-        <div><span>{currentAge ? `${currentAge} 歲` : "尾聲"}</span><b>一生的回聲</b></div>
-        <button className="pause-button" type="button" onClick={() => setPaused(true)}>暫停／協助</button>
-      </header>
-      <AgeRail step={step} />
+  const shell = (content: React.ReactNode, options?: { wide?: boolean; hideSignals?: boolean }) => <main className={`game-shell ${state.settings.softMode ? "soft-mode" : ""} ${state.settings.reducedDistractions ? "reduced-distractions" : ""}`}>
+    <header className="game-bar"><button type="button" className="logo-tile" onClick={() => setPaused(true)} aria-label="暫停遊戲">回</button><div><span>{state.age ? `${state.age} 歲` : "生命開始"}</span><b>一生的回聲</b></div><button type="button" onClick={() => setPhoneOpen((open) => !open)}>手機</button><button type="button" onClick={() => setMemoryOpen(true)}>記憶 <i>{state.memories.length}</i></button><button type="button" onClick={() => setPaused(true)}>暫停</button></header>
+    <LifeRail phase={state.phase} />
+    <div className={`game-content ${options?.wide ? "wide" : ""}`}><section className="play-column">{content}</section>{!options?.hideSignals && <StatusSignals signals={state.signals} />}</div>
+    {phoneOpen && <div className="phone-popover"><StatusSignals signals={state.signals} /><button type="button" onClick={() => setPhoneOpen(false)}>收起手機</button></div>}
+    {memoryOpen && <MemoryBook memories={state.memories} onClose={() => setMemoryOpen(false)} />}
+    {paused && <PauseMenu settings={state.settings} onSetting={setSetting} onClose={() => setPaused(false)} onExit={() => { setPaused(false); go("home"); }} />}
+  </main>;
 
-      {step === "notice" && (
-        <section className="notice-screen centered-screen">
-          <p className="chapter-kicker">開始以前</p><h1>這不是測驗。<br />也不是診斷。</h1>
-          <div className="notice-grid">
-            <article><b>01</b><h2>內容提醒</h2><p>故事包含家庭衝突、精神症狀、就醫、污名與生命危機，但不呈現傷害細節。</p></article>
-            <article><b>02</b><h2>綜合生命</h2><p>主角不是任何一位真實成員，也不是所有精神疾病患者的代表。</p></article>
-            <article><b>03</b><h2>隨時離開</h2><p>沒有倒數。右上角可隨時暫停、做安定練習或查看台灣即時資源。</p></article>
-          </div>
-          <label className="soft-toggle"><input type="checkbox" checked={softMode} onChange={(e) => setSoftMode(e.target.checked)} /><span />使用柔和敘事模式</label>
-          <button className="primary-button" type="button" onClick={() => go("birth")}>我準備好了 <span aria-hidden="true">→</span></button>
-        </section>
-      )}
+  if (state.phase === "notice") return shell(<div className="notice-screen"><span className="tape-label">開始以前</span><h1>這是一段人生。<br />不是測驗，也不是診斷。</h1><div className="notice-cards"><article><b>內容</b><p>家庭衝突、無法理解的身心狀態、污名與求助。沒有具體傷害方式，也沒有以生命危機作為結局。</p></article><article><b>控制</b><p>角色不一定第一次就照你的指令做。這是玩法的一部分，不是網頁壞掉。</p></article><article><b>離開</b><p>隨時可以暫停、降低干擾、查看即時資源。進度只保存在這台裝置。</p></article></div><div className="setting-row"><label><input type="checkbox" checked={state.settings.softMode} onChange={(event) => setSetting("softMode", event.target.checked)} />柔和文字</label><label><input type="checkbox" checked={state.settings.reducedDistractions} onChange={(event) => setSetting("reducedDistractions", event.target.checked)} />降低干擾效果</label></div><button type="button" className="main-action" onClick={() => go("birth", 0)}>繼續</button></div>, { hideSignals: true });
 
-      {step === "birth" && (
-        <section className="birth-screen centered-screen">
-          <p className="chapter-kicker">序章 · 0 歲</p><h1>你出生了。<br /><em>沒有附說明書。</em></h1>
-          <div className="birth-cards">
-            <article><span>家庭氣候</span><strong>未知</strong><p>愛、壓力與沒有被說出口的往事，都已經在這裡。</p></article>
-            <article><span>身體敏感度</span><strong>未知</strong><p>基因不是命運，但它會和環境一起寫下某些可能。</p></article>
-            <article><span>可用資源</span><strong>未知</strong><p>住在哪裡、誰願意相信你，往後都可能改變道路。</p></article>
-          </div>
-          <p className="birth-note">你不能選擇起點。你能做的第一件事，只是呼吸。</p>
-          <button className="primary-button" type="button" onClick={() => go("room")}>呼吸第一口氣 <span aria-hidden="true">→</span></button>
-        </section>
-      )}
+  if (state.phase === "birth") return shell(<div className="birth-screen"><p>0 歲 · 沒有角色建立畫面</p><h1>你出生了。</h1><div className="seed-machine" aria-label="遊戲正在建立隱藏生命條件"><i /><i /><i /><i /><i /><i /><span>先天敏感 × 家庭 × 資源 × 偶發事件</span></div><blockquote>{family.opening}</blockquote><p className="quiet-copy">遊戲已建立一組不會直接顯示的生命參數。沒有任何一項單獨決定未來，也沒有哪種家庭必然導向疾病。</p><button type="button" className="main-action" onClick={() => go("childhood-room", 7, family.roomTone)}>先學會看大人的臉</button></div>, { hideSignals: true });
 
-      {step === "room" && (
-        <section className="game-layout room-chapter">
-          <div className="play-area">
-            {sceneHeader("第一章 · 7 歲 · 凌晨 02:13", "客廳還亮著", "點擊三個發亮的物件。你還不認識病名，只能蒐集大人的線索。")}
-            <div className="interactive-room room-stage">
-              <div className="window"><span /><span /><span /></div><div className="lamp"><b /></div>
-              <div className="sofa"><span /></div><div className="small-table"><i /><b /><em /></div><div className="child"><span /><b /></div>
-              <button className={`clue clue-bag ${clues.includes("bag") ? "found" : ""}`} onClick={() => setClues((old) => old.includes("bag") ? old : [...old, "bag"])} aria-label="查看白色藥袋"><span>01</span></button>
-              <button className={`clue clue-receipts ${clues.includes("receipts") ? "found" : ""}`} onClick={() => setClues((old) => old.includes("receipts") ? old : [...old, "receipts"])} aria-label="查看購物收據"><span>02</span></button>
-              <button className={`clue clue-calendar ${clues.includes("calendar") ? "found" : ""}`} onClick={() => setClues((old) => old.includes("calendar") ? old : [...old, "calendar"])} aria-label="查看月曆"><span>03</span></button>
-            </div>
-          </div>
-          <aside className="journal-panel">
-            <p>你的觀察 <span>{clues.length}/3</span></p>
-            {roomClues.map((item) => <article className={clues.includes(item.id) ? "revealed" : ""} key={item.id}><b>{clues.includes(item.id) ? item.label : "尚未發現"}</b><span>{clues.includes(item.id) ? item.text : "客廳裡還有什麼不尋常？"}</span></article>)}
-            {clues.length === 3 && <button type="button" onClick={() => go("family")}>把線索放進記憶裡 <span>→</span></button>}
-          </aside>
-          <StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "childhood-room") {
+    const roomObjects: SceneObject[] = CHILDHOOD_OBJECTS.map((object) => ({ ...object, visited: state.explored.includes(object.id) }));
+    const canLeave = state.explored.length >= 5 && state.explored.includes("bag");
+    return shell(<><SceneHeading kicker="第一章 · 7 歲 · 凌晨 02:13" title="客廳還亮著">七歲的你不知道正確答案。你只能走過去、看一下，然後記住。第一個房間會替可點物件畫上手繪外框。</SceneHeading><div className="scene-layout"><GameScene className="childhood-home" label="七歲家中的客廳，可點擊物件探索" objects={roomObjects} onInteract={(id) => { const object = CHILDHOOD_OBJECTS.find((item) => item.id === id); const memoryId = object && "memoryId" in object ? object.memoryId : undefined; dispatch({ type: "INSPECT", objectId: id, memoryId, text: family.objectText[id] ?? "你看了一會，還是不知道那代表什麼。" }); }}><span className="scene-time">02:13</span></GameScene><aside className="observation-card"><span>你現在知道的</span><p>{state.lastText}</p><div>{state.explored.length} 樣東西看過了</div>{canLeave ? <button type="button" className="main-action" onClick={() => go("family-talk", 7, family.breakfast)}>把這些放進記憶裡</button> : <small>{state.explored.includes("bag") ? "再看看幾樣東西。" : "桌上有一個不能碰的白色袋子。"}</small>}</aside></div></>, { wide: true });
+  }
 
-      {step === "family" && (
-        <section className="game-layout dialogue-chapter">
-          <div className="story-column">
-            {sceneHeader("第一章 · 7 歲 · 隔天早上", "大人說：不要吵媽媽", "昨晚她說個不停；今天叫了三次都沒有醒。桌上的早餐是冷的。")}
-            <div className="family-portrait"><div className="portrait parent" /><div className="portrait child-portrait" /><i /></div>
-            <Dialogue speaker="爸爸">媽媽只是太累。你乖一點，去學校不要說家裡的事。</Dialogue>
-            {!feedback && <div className="choice-list">
-              <ChoiceButton title="問：昨晚的媽媽去哪裡了？" detail="你想知道，為什麼同一個人會像兩種天氣。" onClick={() => choose("七歲時問出家裡的秘密", { safety: -2, connection: 7 }, "爸爸沉默了很久。", "他最後只說『等你長大就懂』。你沒有得到答案，但知道自己的觀察是真的。", "school")} />
-              <ChoiceButton title="把問題和沒吃完的早餐一起藏起來" detail="安靜，是你最早學會的保護色。" onClick={() => choose("七歲時學會保持安靜", { energy: -5, safety: 4, connection: -5 }, "家裡順利安靜下來。", "沒有人生氣，也沒有人發現你整天肚子痛。安全有時是用消失換來的。", "school")} />
-              <ChoiceButton title="打電話給會聽你說話的阿姨" detail="你不確定這算不算背叛家裡。" onClick={() => choose("七歲時向家外求助", { support: 9, safety: 5, connection: -2 }, "阿姨沒有解釋病名。", "她只說：『這不是你的錯，也不是你一個小孩要處理的。』這句話先成為你的第一個資源。", "school")} />
-            </div>}
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "family-talk") {
+    const done = state.flags.familyTalkDone;
+    return shell(<><SceneHeading kicker="第一章 · 7 歲 · 隔天 11:46" title="不要去吵媽媽">{family.breakfast}</SceneHeading><div className="small-scene family-kitchen"><div className="adult-shape" /><div className="child-shape" /><span className="cold-toast">早餐冷了</span></div>{!done ? <DialogueBox speaker="爸爸" text={family.secrecyLine} thought="昨晚的人和今天躺在房裡的人，真的是同一個媽媽嗎？" choices={[{ id: "ask", label: "昨天晚上她一直說話。", subtext: "話到嘴邊只剩一半。" }, { id: "okay", label: "好。" }, { id: "silence", label: "……", subtext: "不回答也是一種回答。" }]} onChoose={(id) => { const ask = id === "ask"; dispatch({ type: "UNLOCK_MEMORY", memoryId: "family-rule" }); dispatch({ type: "APPLY_CHOICE", effects: ask ? { socialSupport: 3, masking: -2 } : { masking: 8, selfBlame: 3 }, flags: ["familyTalkDone", "familySecrecy", ...(ask ? ["questionedFamily"] : [])], counters: id === "okay" ? { pretendedOkay: 1 } : undefined, text: ask ? "爸爸把杯子移到另一邊：『大人的事很複雜。你長大就會懂。』" : id === "okay" ? "爸爸鬆了一口氣。你得到一個很有用的技能：讓大人放心。" : "冰箱運轉的聲音填滿整個廚房。沒有人再問。" }); }} /> : <div className="consequence-dialogue"><span>爸爸</span><p>{state.lastText}</p><small>沒有旁白替這一幕下結論。</small></div>}{done && <button type="button" className="main-action next-scene" onClick={() => go("school-morning", 12)}>五年後，一個上學日</button>}</>);
+  }
 
-      {step === "school" && (
-        <section className="game-layout school-chapter">
-          <div className="story-column wide-story">
-            {sceneHeader("第二章 · 12 歲 · 早上 07:27", "公車還有三分鐘", "家裡有六件急事，你只能完成三件。每一件都重要；點選三張卡片。")}
-            <div className="school-clock">07:<strong>27</strong><span>下一班 08:02</span></div>
-            <div className="task-grid morning-grid">
-              {morningTasks.map((task) => {
-                const picked = morning.includes(task.id);
-                return <button type="button" className={picked ? "picked" : ""} key={task.id} onClick={() => setMorning((old) => picked ? old.filter((id) => id !== task.id) : old.length < 3 ? [...old, task.id] : old)}><span>{picked ? "已選" : "待辦"}</span><strong>{task.label}</strong><p>{task.note}</p></button>;
-              })}
-            </div>
-            <div className="selection-footer"><p>你還能選 <strong>{3 - morning.length}</strong> 件</p><button type="button" disabled={morning.length !== 3 || Boolean(feedback)} onClick={completeMorning}>讓早晨往前走 →</button></div>
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "school-morning") {
+    const completed = state.morning.completed;
+    const outOfBed = completed.includes("bed");
+    const openSevenWindows = () => DISTRACTIONS.forEach(([id]) => dispatch({ type: "ADD_DISTRACTION", distractionId: id }));
+    const morningObjects: SceneObject[] = [
+      { id: "bed", label: outOfBed ? "床" : "起床", icon: "床", className: "morning-bed", visited: outOfBed },
+      { id: "clothes", label: "制服", icon: "衣", className: "morning-closet", visited: completed.includes("clothes") },
+      { id: "notebook", label: "聯絡簿", icon: "簿", className: "morning-desk", visited: completed.includes("notebook") },
+      { id: "phone", label: "手機", icon: "訊", className: "morning-phone", visited: state.morning.distractions.length > 0 },
+      { id: "washer", label: "洗衣機", icon: "洗", className: "morning-washer" },
+      { id: "keys", label: "鑰匙", icon: "匙", className: "morning-keys", visited: completed.includes("keys") },
+      { id: "shoes", label: "鞋子", icon: "鞋", className: "morning-shoes", visited: completed.includes("shoes") },
+      { id: "door", label: "出門", icon: "門", className: "morning-door" },
+    ];
+    const interact = (id: string) => {
+      if (id === "bed") return dispatch({ type: "MORNING_ACTION", actionId: "bed" });
+      if (!outOfBed) return dispatch({ type: "SET_TEXT", text: "你知道東西都在房間裡。角色還坐在床邊。再按一次起床。" });
+      if (id === "phone") return openSevenWindows();
+      if (id === "washer") return dispatch({ type: "ADD_DISTRACTION", distractionId: "washer" });
+      if (id === "door") { dispatch({ type: "MORNING_ACTION", actionId: "door" }); setDoorPrompt(true); return; }
+      dispatch({ type: "MORNING_ACTION", actionId: id });
+      if (id === "notebook" && !state.settings.reducedDistractions) openSevenWindows();
+      dispatch({ type: "SET_TEXT", text: id === "keys" ? "鑰匙在冰箱旁邊。你完全不記得為什麼會在那裡。" : id === "notebook" ? "聯絡簿找到了。手機在同一秒震了一下。" : id === "clothes" ? "制服穿反一次。你重穿。" : "鞋帶今天先不要追求對稱。" });
+    };
+    const leaveMorning = () => {
+      if (!completed.includes("notebook")) dispatch({ type: "UNLOCK_MEMORY", memoryId: "left-behind" });
+      if ((state.morning.attempts.bed ?? 0) > 1) dispatch({ type: "UNLOCK_MEMORY", memoryId: "three-clicks" });
+      dispatch({ type: "APPLY_CHOICE", next: "ordinary-day", age: 14, effects: { sleepDebt: 5, selfBlame: completed.includes("notebook") ? 0 : 5 }, flags: ["finishedMorning", ...(completed.includes("notebook") ? [] : ["forgotNotebook"])], counters: { missedBus: state.morning.actions > 9 ? 1 : 0 }, text: completed.includes("notebook") ? "你趕上下一班車。今天帶齊了東西，卻像已經過完半天。" : "到校門口，你才想起聯絡簿還在桌上。" });
+      setDoorPrompt(false);
+    };
+    return shell(<><SceneHeading kicker="第二章 · 12 歲 · 07:31" title="我剛剛到底要幹嘛？">目標本來很簡單：起床、穿制服、拿聯絡簿、找鑰匙、穿鞋、出門。知道順序不代表角色會照順序動。</SceneHeading><div className="morning-hud"><div className={state.morning.listHidden ? "task-note hidden" : "task-note"}><span>出門前</span>{["bed", "clothes", "notebook", "keys", "shoes"].map((id) => <i key={id} className={completed.includes(id) ? "done" : ""}>{({ bed: "起床", clothes: "制服", notebook: "聯絡簿", keys: "鑰匙", shoes: "鞋子" } as Record<string, string>)[id]}</i>)}</div><b>07:{String(31 + Math.min(10, state.morning.actions)).padStart(2, "0")}</b></div><GameScene className="morning-room" label="十二歲上學前的房間" objects={morningObjects} onInteract={interact} /><div className="action-caption" role="status"><span>角色</span><p>{state.lastText}</p></div>{state.morning.distractions.length > 0 && <div className="distraction-field" aria-label="同時出現的干擾視窗">{DISTRACTIONS.filter(([id]) => state.morning.distractions.includes(id)).map(([id, from, text], index) => <button type="button" style={{ "--scatter": index } as React.CSSProperties} key={id} onClick={() => dispatch({ type: "SET_TEXT", text: `${from}：${text}` })}><span>{from}</span><p>{text}</p></button>)}<button type="button" className="clear-windows" onClick={() => dispatch({ type: "CLEAR_DISTRACTIONS" })}>全部先關掉</button></div>}{doorPrompt && <div className="door-prompt"><h2>現在出門？</h2><p>{completed.includes("notebook") ? "東西好像都帶了。『好像』。" : "腦中有一個空格。公車已經快到了。"}</p><button type="button" className="main-action" disabled={!completed.includes("keys") || !completed.includes("shoes") || !completed.includes("clothes")} onClick={leaveMorning}>拉開門</button><button type="button" onClick={() => setDoorPrompt(false)}>再找一下</button></div>}</>, { wide: true });
+  }
 
-      {step === "path" && (
-        <section className="game-layout path-chapter">
-          <div className="story-column wide-story">
-            {sceneHeader("第三章 · 17 歲", "身體開始用不同方式說話", "選擇這一輪想體驗的路線。這不是自我診斷；每一種疾病內部也有很大的個別差異。")}
-            <div className="path-grid">
-              {(Object.keys(pathInfo) as PathKey[]).map((key, index) => <button type="button" key={key} onClick={() => { setPath(key); setLog((old) => [...old, `選擇體驗：${pathInfo[key].label}`]); go("clinic"); }}><span>0{index + 1}</span><h2>{pathInfo[key].label}</h2><p>{pathInfo[key].short}</p><i>進入這條路線 →</i></button>)}
-            </div>
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "ordinary-day") {
+    const ordinary = [["school", "上學", "第二節下課，朋友傳來一張很爛的梗圖。你笑到被老師看。"], ["food", "買晚餐", "超商飯糰第二件六折。你拿了口味比較怪的那個。"], ["video", "回家看影片", "本來只看一集。片尾播完，天還沒有塌下來。"], ["sleep", "睡覺", "今天居然就這樣過完了。"]] as const;
+    const done = ordinary.filter(([id]) => state.flags[`ordinary-${id}`]).length;
+    return shell(<div className="ordinary-day"><SceneHeading kicker="插頁 · 14 歲 · 沒有重大事件" title="今天什麼都沒有發生。">沒有揭露、沒有崩潰、沒有重要領悟。把一天過完就好。</SceneHeading><div className="ordinary-list">{ordinary.map(([id, label, text], index) => <button type="button" key={id} disabled={index !== done} className={state.flags[`ordinary-${id}`] ? "done" : ""} onClick={() => dispatch({ type: "APPLY_CHOICE", flags: [`ordinary-${id}`], counters: id === "food" ? { goodFood: 1 } : id === "school" ? { laughedHard: 1 } : id === "sleep" ? { ordinaryDays: 1 } : undefined, text })}><span>{String(index + 1).padStart(2, "0")}</span><b>{label}</b><p>{state.flags[`ordinary-${id}`] ? text : ""}</p></button>)}</div>{done === ordinary.length && <button type="button" className="main-action next-scene" onClick={() => go("teen-event", state.teenPattern === "perception" ? 17 : state.teenPattern === "alarm" ? 15 : 16)}>有一天，普通的做法不夠用了</button>}</div>);
+  }
 
-      {step === "clinic" && path && (
-        <section className={`game-layout dialogue-chapter lens-${path}`}>
-          <div className="story-column">
-            {sceneHeader("第三章 · 17 歲 · 第一次身心科門診後", "現在，它有了一個名字", pathInfo[path].lens)}
-            <div className="clinic-ticket"><span>身心科門診</span><b>第 071 號</b><i>下一位</i></div>
-            <Dialogue speaker="媽媽 · 看見你手上的藥袋">你七歲那年看到的白色藥袋，也是我的。那時候我不知道怎麼說，只想讓你以為家裡沒事。</Dialogue>
-            <Dialogue speaker="媽媽" thought="原來妳也早就知道這種害怕。">可是醫生是不是想太多？大家壓力大都會這樣。先不要讓學校知道。</Dialogue>
-            {!feedback && <div className="choice-list">
-              <ChoiceButton title="把醫生畫的症狀圖推到她面前" detail="你想要她第一次看見，不只看見診斷名稱。" onClick={() => choose("十七歲向家人完整說明", { energy: -6, connection: 10, safety: 3 }, "她看了很久。", "她沒有立刻理解，只問你下次回診要不要陪。理解不是一句話發生的，但門開了一條縫。", "day")} />
-              <ChoiceButton title="只說：我需要規律回診和睡覺" detail="先談需求，不交出所有隱私。" onClick={() => choose("十七歲只說明自己的需要", { energy: -2, safety: 8, connection: 3 }, "你保留了自己的界線。", "不完整揭露並不等於說謊。你先替生活爭取一小塊可以呼吸的地方。", "day")} />
-              <ChoiceButton title="說醫生也覺得沒什麼" detail="你決定先讓家裡平靜。" onClick={() => choose("十七歲隱藏診斷", { safety: 2, support: -5, connection: -4 }, "媽媽鬆了一口氣。", "你也笑了一下。晚上，藥袋被塞進書包最底層；需要幫忙時，你得先跨過自己築起的牆。", "day")} />
-            </div>}
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "teen-event") {
+    const copy = PATTERN_COPY[state.teenPattern];
+    const finishTeen = () => { const event = TEEN_EVENTS[state.teenPattern]; dispatch({ type: "UNLOCK_MEMORY", memoryId: "first-interference" }); dispatch({ type: "APPLY_CHOICE", next: "wrong-explanation", effects: event.hiddenEffects, flags: event.futureFlags, text: "你先替這件事找了一個普通理由。" }); };
+    let game: React.ReactNode;
+    if (state.teenPattern === "surge") {
+      const full = state.teenActions.length >= 5;
+      game = <><div className="surge-grid">{SURGE_TASKS.map(([id, label, note]) => <button type="button" key={id} disabled={state.teenActions.includes(id) || full} onClick={() => dispatch({ type: "TEEN_ACTION", actionId: id, effects: { sleepDebt: 3 }, text: note })}><span>{state.teenActions.includes(id) ? "已開始" : "+ 新任務"}</span><b>{label}</b></button>)}</div><div className="speed-caption">{state.lastText}</div>{full && <div className="crash-list"><span>兩天後 · 06:51</span><h2>未完成</h2><p>企劃、房間、簡報、課程、聚會、信用卡帳單、工作報告、睡眠。</p><button type="button" className="main-action" onClick={finishTeen}>按第四次鬧鐘</button></div>}</>;
+    } else if (state.teenPattern === "low") {
+      const tries = state.teenActions.filter((id) => id.startsWith("shower-")).length;
+      const emailTries = state.teenActions.filter((id) => id.startsWith("email-")).length;
+      game = <div className="low-game"><div className="heavy-room"><button type="button" onClick={() => dispatch({ type: "TEEN_ACTION", actionId: `shower-${tries + 1}`, effects: { selfBlame: tries < 2 ? 2 : -1 }, text: tries === 0 ? "按鈕沒有壞。角色只是沒有起來。" : tries === 1 ? "等一下。" : "第三次，角色坐到床邊。洗澡還在房間另一頭。" })}>洗澡</button><button type="button" onClick={() => dispatch({ type: "TEEN_ACTION", actionId: `email-${emailTries + 1}`, effects: { selfBlame: 1 }, text: emailTries === 0 ? "主旨：關於缺交作業……游標閃著。" : "你打了兩行，全部刪掉。未讀訊息變成 15。" })}>回老師的信</button><div className="message-stack"><span>朋友：你怎麼都不回？</span><span>班導：只是一封信。</span><span>你：對啊，只是一封信。</span></div></div><p className="speed-caption">{state.lastText}</p>{tries >= 3 && emailTries >= 2 && <button type="button" className="main-action" onClick={finishTeen}>今天先到這裡</button>}</div>;
+    } else if (state.teenPattern === "perception") {
+      const checks = state.teenActions.length;
+      const fragments = ["……就是他……", "……制服……很怪……", "下一班……延誤……"];
+      game = <div className="station-game"><div className="platform"><span className="train-line" /><div className="npc npc-a" /><div className="npc npc-b" /><div className="npc npc-c" /><p>{fragments[Math.min(checks, fragments.length - 1)]}</p></div><div className="reality-choices">{[["turn", "回頭確認"], ["move", "走到另一根柱子"], ["ask", "問：你剛剛叫我嗎？"]].map(([id, label], index) => <button type="button" key={id} disabled={state.teenActions.includes(id)} onClick={() => dispatch({ type: "TEEN_ACTION", actionId: id, effects: { sleepDebt: 2 }, text: index === 0 ? "他們還在說話，沒有看你。這沒有讓下一句變得更容易。" : index === 1 ? "換了位置。廣播、腳步和談話仍疊在一起。" : "對方愣了一下：『蛤？沒有啊。』" })}>{label}</button>)}</div><p className="speed-caption">{state.lastText}</p>{checks >= 3 && <button type="button" className="main-action" onClick={finishTeen}>下一班車來了</button>}</div>;
+    } else {
+      const reacted = state.teenActions.length > 0;
+      game = <div className={`alarm-game ${reacted ? "released" : ""}`}><div className="corridor"><div className="slam-door" /><strong>{state.settings.softMode ? "碰。" : "砰。"}</strong><p>視野裡能選的東西突然變少。</p></div>{!reacted ? <div className="narrow-choices">{[["fine", "沒事。"], ["startled", "嚇到而已。"], ["leave", "我出去一下。"]].map(([id, label]) => <button type="button" key={id} onClick={() => dispatch({ type: "TEEN_ACTION", actionId: id, effects: id === "fine" ? { masking: 5 } : {}, text: id === "leave" ? "你走到樓梯間。手還在抖，至少不用解釋。" : `你說：『${label}』同學點點頭。` })}>{label}</button>)}</div> : <><p className="speed-caption">{state.lastText}</p><button type="button" className="main-action" onClick={finishTeen}>午休繼續</button></>}</div>;
+    }
+    return shell(<><SceneHeading kicker={copy.kicker} title={copy.title}>{copy.intro}</SceneHeading>{game}</>, { wide: true });
+  }
 
-      {step === "day" && (
-        <section className="game-layout day-chapter">
-          <div className="story-column wide-story">
-            {sceneHeader("第四章 · 26 歲 · 星期三", "今天需要 14 格能量", "你醒來只有 7 格。這不是時間管理題；有些日子，洗澡和回一則訊息本身就是任務。")}
-            <div className="energy-budget"><span>今日可用</span><b>{7 - energyUsed}</b><i>/ 7 格能量</i><div><em style={{ width: `${Math.max(0, (7 - energyUsed) / 7 * 100)}%` }} /></div></div>
-            <div className="task-grid day-grid">
-              {dayTasks.map((task) => {
-                const picked = selectedTasks.includes(task.id); const available = picked || energyUsed + task.cost <= 7;
-                return <button type="button" key={task.id} className={picked ? "picked" : ""} disabled={!available || Boolean(feedback)} onClick={() => setSelectedTasks((old) => picked ? old.filter((id) => id !== task.id) : [...old, task.id])}><span>{task.cost} 格</span><strong>{task.label}</strong><i>{picked ? "放回能量" : available ? "加入今天" : "能量不足"}</i></button>;
-              })}
-            </div>
-            <div className="selection-footer"><p>所有任務都合理，總和卻超過你今天擁有的。</p><button type="button" disabled={selectedTasks.length < 2 || Boolean(feedback)} onClick={completeDay}>結束這一天 →</button></div>
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "wrong-explanation") {
+    const copy = PATTERN_COPY[state.teenPattern];
+    const done = state.flags.wrongExplanationDone;
+    return shell(<><SceneHeading kicker={`${state.age} 歲 · 隔天`} title="先找一個普通的理由">當事情還沒有名字，身邊的人和你都會用已知的答案把它填起來。</SceneHeading>{!done ? <DialogueBox speaker="同學／家人" text={copy.rationalization} thought={copy.thought} choices={[{ id: "busy", label: "最近比較忙。" }, { id: "haha", label: "哈哈，可能吧。" }, { id: "coffee", label: "咖啡喝太多啦。" }, { id: "unknown", label: "……我不知道。" }]} onChoose={(id) => dispatch({ type: "APPLY_CHOICE", flags: ["wrongExplanationDone", "maskedFirstInterference"], effects: id === "unknown" ? { selfBlame: -2 } : { masking: 5, selfBlame: 3 }, counters: id === "haha" ? { pretendedOkay: 1 } : undefined, text: id === "unknown" ? "對方停了一下：『喔。』上課鐘響了，話留在原地。" : "對方接受了這個答案。你也暫時接受。" })} /> : <div className="consequence-dialogue"><span>事情沒有因此消失</span><p>{state.lastText}</p></div>}{done && <button type="button" className="main-action next-scene" onClick={() => go("counselor", 17)}>幾週後，輔導室</button>}</>);
+  }
 
-      {step === "work" && (
-        <section className="game-layout dialogue-chapter work-chapter">
-          <div className="story-column">
-            {sceneHeader("第五章 · 33 歲 · 主管面談", "能不能保證以後不請假？", "你已經連續工作八個月。主管說很肯定你，只是最近回診和身體不適讓出勤表不好看。")}
-            <div className="office-scene"><div className="desk" /><span className="worker-a" /><span className="worker-b" /><i>出勤紀錄</i></div>
-            <Dialogue speaker="主管">公司願意幫忙，但我需要知道，你到底生了什麼病？</Dialogue>
-            {!feedback && <div className="choice-list">
-              <ChoiceButton title="說出完整診斷" detail="可能換來理解，也可能讓別人從此只看見病名。" onClick={() => choose("三十三歲在職場完整揭露", { energy: -5, safety: -3, connection: 8 }, "主管謝謝你的誠實。", "他答應排班前先詢問你，卻也把一項重要工作交給別人。支持與偏見，有時會出現在同一句話裡。", "care")} />
-              <ChoiceButton title="只說明需要的調整" detail="固定回診時段、書面工作指令，以及提早告知排班。" onClick={() => choose("三十三歲提出具體職務需求", { safety: 10, support: 5, energy: -2 }, "你談的是工作，不是交代整個人生。", "主管沒有完全明白症狀，但同意先試三個月。合理調整讓能力有機會被看見。", "care")} />
-              <ChoiceButton title="說是普通身體不適" detail="保住隱私，也繼續獨自處理每次波動。" onClick={() => choose("三十三歲保留職場隱私", { safety: 3, energy: -7, connection: -4 }, "面談很快結束。", "你暫時避開被貼標籤的風險。下次回診，你仍得在工作、收入與健康之間自己挪位置。", "care")} />
-            </div>}
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "counselor") {
+    const done = state.flags.counselorDone;
+    const canSayMore = state.flags.questionedFamily || family.id === "warm";
+    return shell(<><SceneHeading kicker="第四章 · 17 歲 · 輔導室" title="最近家裡還好嗎？">門外有人等。牆上的鐘走得很大聲。你知道真正的答案，但家裡的規則也一起坐在這裡。</SceneHeading><div className="counselor-room"><div className="plant-doodle" /><div className="tissue-box">面紙</div><span>14:52</span></div>{!done ? <><div className={`draft-note ${state.flags.draftDeleted ? "deleted" : ""}`}><span>如果說不出口，可以先寫</span><p>{state.flags.draftDeleted ? "（空白）" : "我其實最近已經……"}</p>{!state.flags.draftDeleted && <button type="button" onClick={() => dispatch({ type: "APPLY_CHOICE", flags: ["draftDeleted"], counters: { deletedMessages: 1 }, text: "你把那一行塗掉。紙沒有問為什麼。" })}>刪掉</button>}</div><DialogueBox speaker="輔導老師" text="不用一次講清楚。今天先告訴我，現在最難的是哪一件事？" thought="我好像已經撐不住普通的生活了，而且我不知道家裡能不能知道。" choices={[{ id: "fine", label: "還好。" }, { id: "normal", label: "普通。" }, { id: "silence", label: "……" }, { id: "unknown", label: "我不知道。" }, ...(canSayMore ? [{ id: "something", label: "有些事情好像不太對。", subtext: "這句話仍然沒有說完。" }] : [])]} onChoose={(id) => { const asked = id === "something" || id === "unknown"; dispatch({ type: "APPLY_CHOICE", flags: ["counselorDone", ...(asked ? ["askedForHelp"] : ["couldNotAskYet"])], effects: asked ? { professionalSupport: 12, masking: -4 } : { masking: 6 }, counters: asked ? { saidNotOkay: 1 } : id === "fine" ? { pretendedOkay: 1 } : undefined, text: asked ? "老師沒有說『大家都會』。她拿出一張轉介單，問你願不願意一起想下一步。" : "談話結束。兩週後，你又缺席一次；班導打電話給家裡，轉介仍然來了，只是繞了一段路。" }); }} /></> : <div className="consequence-dialogue"><span>輔導室 · 15:08</span><p>{state.lastText}</p><small>求助與沒有求助都會留下後續，不是答對或答錯。</small></div>}{done && <button type="button" className="main-action next-scene" onClick={() => go("clinic-trip", 17)}>前往第一次門診</button>}</>);
+  }
 
-      {step === "care" && (
-        <section className="game-layout dialogue-chapter care-chapter">
-          <div className="story-column">
-            {sceneHeader("第六章 · 45 歲 · 兩張掛號單", "你也是病人，也是照顧者", "媽媽明早要做檢查；你的精神科回診在同一時間。她以前接送過你很多次，現在輪到你拿著她的健保卡。")}
-            <div className="ticket-pair"><article><span>08:40</span><b>媽媽 · 神經科</b></article><i>同時</i><article><span>09:10</span><b>你 · 身心科</b></article></div>
-            <Dialogue speaker="媽媽">我的可以再約。你不要因為我又不舒服。</Dialogue>
-            {!feedback && <div className="choice-list">
-              <ChoiceButton title="取消自己的回診，先陪媽媽" detail="愛有時很自然，也可能讓照顧者慢慢消失。" onClick={() => choose("四十五歲先照顧家人", { connection: 9, safety: -9, energy: -6 }, "你陪她完成檢查。", "她一路握著你的手。晚上，你發現自己的藥只剩兩天；照顧別人與犧牲自己並不是同一件事，卻常被排在一起。", "group")} />
-              <ChoiceButton title="問手足，也詢問醫院交通與陪診資源" detail="把照顧從一個人的責任，改成一張網。" onClick={() => choose("四十五歲把照顧變成共同任務", { support: 12, safety: 7, connection: 4, energy: -3 }, "你打了很多通電話。", "手足先抱怨，最後仍排開半天。求助沒有讓事情變輕鬆，卻讓你們兩個人的回診都沒有消失。", "group")} />
-              <ChoiceButton title="堅持自己的回診，請媽媽改期" detail="界線可能帶來內疚，也能保住你長期照顧的能力。" onClick={() => choose("四十五歲守住自己的醫療", { safety: 11, connection: -4, energy: -2 }, "媽媽說她知道。", "你仍一路內疚到診間。醫師提醒：能持續照顧的人，也需要先是一個活得下去的人。", "group")} />
-            </div>}
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "clinic-trip") {
+    const current = CLINIC_TIMELINE[Math.min(state.clinicStep, CLINIC_TIMELINE.length - 1)];
+    const complete = state.clinicStep >= CLINIC_TIMELINE.length;
+    return shell(<><SceneHeading kicker="第五章 · 17 歲 · 星期四" title="看九分鐘的醫生，用掉一個上午">沒有「回診 → 支持增加」。你要真的走完起床、公車、捷運、掛號、等候、診間和領取資料。</SceneHeading><div className="clinic-timeline">{CLINIC_TIMELINE.map((item, index) => <article key={item.time} className={index < state.clinicStep ? "past" : index === state.clinicStep ? "now" : "future"}><time>{item.time}</time><div><b>{item.label}</b><p>{index <= state.clinicStep ? item.note : ""}</p></div></article>)}</div>{!complete ? <div className="waiting-action"><span>{current.time}</span><p>{current.note}</p><button type="button" className="main-action" onClick={() => dispatch({ type: "CLINIC_NEXT", text: current.note })}>{state.clinicStep === 4 ? "再等一個號碼" : "讓時間往前"}</button></div> : <button type="button" className="main-action next-scene" onClick={() => go("clinic-room", 17)}>診間門打開了</button>}</>, { wide: true });
+  }
 
-      {step === "group" && (
-        <section className="game-layout group-chapter">
-          <div className="story-column wide-story">
-            {sceneHeader("第七章 · 57 歲 · 晚上 23:48", "群組裡有人說：我撐不住了", softMode ? "那是一句很沉的訊息。請選兩句你想傳出的回覆。" : "訊息提到不想繼續活下去。請選兩句你想傳出的回覆；支持也需要確認現實中的安全。")}
-            <div className="phone-chat"><p>23:48</p><div className="incoming">今天真的撐不住。<br />手機也快沒電了。</div><span>已讀 7</span></div>
-            <div className="reply-grid">
-              {groupReplies.map((reply) => { const picked = replies.includes(reply.id); return <button type="button" className={picked ? "picked" : ""} disabled={(!picked && replies.length >= 2) || Boolean(feedback)} key={reply.id} onClick={() => setReplies((old) => picked ? old.filter((id) => id !== reply.id) : [...old, reply.id])}><span>{picked ? "已選" : "回覆"}</span><p>{reply.text}</p></button>; })}
-            </div>
-            <div className="selection-footer"><p>你不必當治療者，但可以成為通往安全的橋。</p><button type="button" disabled={replies.length !== 2 || Boolean(feedback)} onClick={completeGroup}>送出兩則訊息 →</button></div>
-            {feedbackCard}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "clinic-room") {
+    const spoken = state.flags.clinicSpoken;
+    const treatment = state.flags.treatmentTalkDone;
+    return shell(<><SceneHeading kicker="第五章 · 17 歲 · 11:37" title="九分鐘要從哪裡開始？">醫師看著轉介單，再看你。電腦游標停在空白欄位。</SceneHeading><div className="clinic-desk"><span>第 071 號</span><div className="paper-stack" /><div className="white-bag-prop">○○身心○○</div></div>{!spoken && <DialogueBox speaker="醫師" text="最近最影響生活的是什麼？" thought={PATTERN_COPY[state.teenPattern].thought} choices={[{ id: "sleep", label: "睡不太好。" }, { id: "life", label: "我連普通事情都做不完。" }, { id: "fine", label: "其實還好。" }, { id: "paper", label: "把輔導室那張紙推過去。" }]} onChoose={(id) => dispatch({ type: "APPLY_CHOICE", flags: ["clinicSpoken"], effects: id === "fine" ? { masking: 4 } : { professionalSupport: 5 }, counters: id === "life" ? { saidNotOkay: 1 } : id === "fine" ? { pretendedOkay: 1 } : undefined, text: id === "fine" ? "醫師問了第二次：『那為什麼今天會來？』你看著桌上的白色袋子。" : "醫師把你的睡眠、身體反應與生活干擾分開記下。沒有一個格子寫得下全部。" })} />}{spoken && !treatment && <div className="treatment-talk"><div className="consequence-dialogue"><span>醫師</span><p>{state.lastText}</p></div><h2>談到治療時，你最先想到生活。</h2><p>藥物、心理支持與作息調整都可能有幫助，也各自需要時間與取捨。遊戲不替你決定治療。</p><div className="plain-choices"><button type="button" onClick={() => dispatch({ type: "APPLY_CHOICE", flags: ["treatmentTalkDone"], effects: { professionalSupport: 5 }, text: "你說早上已經很難起來，最怕再更想睡。醫師把『白天嗜睡』圈起來，約好下次一起看紀錄。" })}>說出：我最怕早上更起不來。</button><button type="button" onClick={() => dispatch({ type: "APPLY_CHOICE", flags: ["treatmentTalkDone"], effects: { masking: 2 }, text: "你先點頭，把想問的副作用留在喉嚨裡。藥袋拿在手上，比記憶裡更重。" })}>先點頭，不問。</button><button type="button" onClick={() => dispatch({ type: "APPLY_CHOICE", flags: ["treatmentTalkDone"], effects: { professionalSupport: 7 }, text: "你問能不能把睡眠、食慾和上課狀況記下來，下次再討論。這不是保證有效，只是讓生活也進入診間。" })}>問：可以先記生活影響，下次再談嗎？</button></div></div>}{treatment && <><div className="consequence-dialogue"><span>11:46 · 看診結束</span><p>{state.lastText}</p></div><button type="button" className="main-action next-scene" onClick={() => go("memory-return", 17)}>你看見袋子上的院徽</button></>}</>);
+  }
 
-      {step === "plan" && (
-        <section className="game-layout plan-chapter">
-          <div className="story-column wide-story">
-            {sceneHeader("第八章 · 68 歲", "把危機計畫寫在平靜的時候", "逐欄選一項，完成一張能交給家人、朋友或專業人員看的支持卡。")}
-            <div className="plan-builder">
-              {planGroups.map((group, index) => <fieldset key={group.id}><legend><span>0{index + 1}</span>{group.label}</legend>{group.options.map((option) => <label className={plan[group.id] === option ? "picked" : ""} key={option}><input type="radio" name={group.id} checked={plan[group.id] === option} onChange={() => setPlan((old) => ({ ...old, [group.id]: option }))} />{option}</label>)}</fieldset>)}
-            </div>
-            {Object.keys(plan).length === planGroups.length && <div className="support-card"><p>我的支持卡</p><ol>{planGroups.map((group) => <li key={group.id}><span>{group.label}</span><b>{plan[group.id]}</b></li>)}</ol><button type="button" onClick={() => { updateStats({ safety: 12, support: 10 }); setLog((old) => [...old, "六十八歲，事先寫下自己的支持方式。"]); go("legacy"); }}>把卡片交給信任的人 →</button></div>}
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
+  if (state.phase === "memory-return") {
+    const whiteBag = state.memories.find((memory) => memory.id === "white-bag");
+    const interpreted = Boolean(whiteBag?.interpretation);
+    return shell(<><SceneHeading kicker="第六章 · 17 歲 · 醫院走廊" title="……我是不是看過這個？">不是跳出答案。是一個畫面先回來：凌晨、客廳、桌邊不能碰的袋子。</SceneHeading><div className="memory-replay"><article><span>7 歲</span><h2>{whiteBag?.titleAtTime ?? "白色袋子"}</h2><p>{whiteBag?.descriptionAtTime ?? "上面很多看不懂的字。"}</p></article><i aria-hidden="true">↔</i><article><span>17 歲</span><h2>手上的袋子</h2><p>同樣的紙、同樣的摺線。院徽像一個你差點想起的字。</p></article></div>{!interpreted ? <button type="button" className="main-action next-scene" onClick={() => dispatch({ type: "REINTERPRET_MEMORY", memoryId: "white-bag", interpretation: family.clinicInterpretation })}>讓記憶翻到背面</button> : <><div className="reinterpretation"><span>記憶碎片更新，但沒有全部解答</span><p>{whiteBag?.interpretation}</p><small>房門裡說過什麼、答錄機刪掉什麼，仍可能永遠不知道。</small></div><button type="button" className="main-action next-scene" onClick={() => go("slice-ending", 18)}>十八歲生日</button></>}</>);
+  }
 
-      {step === "legacy" && (
-        <section className="game-layout legacy-chapter">
-          <div className="story-column wide-story">
-            {sceneHeader("終章 · 82 歲 · 一個普通的下午", "你要留下哪一件小事？", "人生沒有被疾病全部占滿。最後留下來的，也許不是診斷或病歷，而是一件微小、反覆陪你活著的東西。")}
-            <div className="legacy-grid">
-              <button onClick={() => finishLife("群組裡每天有人說的那句晚安")}><span className="legacy-chat">晚安</span><b>一則群組訊息</b><p>有人不一定認識你的臉，卻記得你今天有沒有出現。</p></button>
-              <button onClick={() => finishLife("用了很多年的七格藥盒")}><span className="legacy-pills"><i /><i /><i /><i /><i /><i /><i /></span><b>一只舊藥盒</b><p>它不是順從的證明，是你一次次調整、詢問與選擇的痕跡。</p></button>
-              <button onClick={() => finishLife("窗邊重新長出新葉的植物")}><span className="legacy-plant"><i /></span><b>一盆植物</b><p>有時只澆了一點水，也還是活過了一個季節。</p></button>
-              <button onClick={() => finishLife("陪家人與自己跑過無數次醫院的車票")}><span className="legacy-ticket">往返</span><b>一張舊車票</b><p>去醫院的路很長，回家的路也一樣是真實生活。</p></button>
-            </div>
-          </div><StatPanel stats={stats} />
-        </section>
-      )}
-
-      {step === "ending" && path && (
-        <section className="ending-screen">
-          <div className="ending-copy">
-            <p className="chapter-kicker">終章 · 82 歲</p><h1>你活過的，<br />不只是一種病。</h1>
-            <p>某個清晨，你在睡夢中離開。桌上留下了<strong>{legacy}</strong>。這不是勝利，也不是失敗；是一段曾經需要很多力氣、也有很多普通時刻的人生。</p>
-          </div>
-          <div className="ending-summary">
-            <span>你體驗的生命路線</span><h2>{pathInfo[path].label}</h2><p>{pathInfo[path].detail}</p>
-            <div className="final-stats"><div><b>{stats.connection}</b><span>連結</span></div><div><b>{stats.support}</b><span>支持網</span></div><div><b>{stats.safety}</b><span>安全感</span></div></div>
-            <p className="no-score">數字沒有判定死亡方式，也沒有產生好壞結局。它只記錄：一個人必須用多少選擇，才能把日常繼續下去。</p>
-          </div>
-          <div className="debrief">
-            <article><span>回看這一生</span><h3>困難不只來自症狀</h3><p>家庭沉默、求職壓力、交通、費用、污名與照顧責任，都會放大疾病帶來的不便。</p></article>
-            <article><span>回看資源</span><h3>支持不是替人決定</h3><p>真正有用的支持包括相信感受、詢問需要、提供選擇、協助連結專業，以及尊重當事人的自主。</p></article>
-            <article><span>回看病友</span><h3>他們也在照顧別人</h3><p>病友不只是被幫助的人，也可能是子女、父母、工作者、照顧者，以及深夜願意回覆別人的同伴。</p></article>
-          </div>
-          <div className="resource-bar">
-            <div><b>如果故事讓你不舒服</b><span>先離開畫面、喝水，找一位可信任的人。台灣可撥24小時免付費安心專線。</span></div>
-            <a href="tel:1925">1925 安心專線</a><a href="https://dep.mohw.gov.tw/DOMHAOH/cp-6435-70356-107.html" target="_blank" rel="noreferrer">社區心理衛生中心</a>
-          </div>
-          <footer><p>本作由支持團體的共同經驗啟發，所有角色與事件皆為融合、去識別化的虛構創作，不用於自我診斷。</p><button type="button" onClick={newGame}>走另一條人生路線</button></footer>
-        </section>
-      )}
-
-      {paused && (
-        <div className="pause-overlay" role="dialog" aria-modal="true" aria-labelledby="pause-title">
-          <div className="pause-card"><p>先停在這裡</p><h2 id="pause-title">你不需要把故事一次走完。</h2><div className="grounding"><b>30 秒回到現在</b><span>雙腳踩地。看見 5 樣東西、觸碰 4 樣東西、聽見 3 種聲音，慢慢吐一口氣。</span></div><div className="pause-resources"><a href="tel:1925"><b>1925</b><span>24小時安心專線</span></a><a href="tel:119"><b>119</b><span>有立即危險時</span></a></div><button className="primary-button" onClick={() => setPaused(false)}>回到遊戲</button><button className="exit-button" onClick={() => { setPaused(false); setStep("home"); }}>先離開，保留進度</button></div>
-        </div>
-      )}
-    </main>
-  );
+  return shell(<div className="slice-ending"><span className="tape-label">第一階段結束 · 18 歲</span><h1>你還不知道<br />這一生會叫什麼。</h1><p>你只知道：有些早晨，別人一個按鈕就能完成的事，你要按三次。有些話不是不知道，而是到嘴邊會變成別的話。</p><blockquote>病歷以後會記錄很多事情，但不會記錄全部的人生。</blockquote><section className="future-map"><header><span>這一生還會繼續</span><p>成年段已保留事件槽與長期旗標；下一階段會逐幕擴寫，不以摘要冒充遊戲。</p></header>{FUTURE_CHAPTERS.map((chapter) => <article key={chapter.age}><b>{chapter.age}</b><div><h2>{chapter.title}</h2><p>{chapter.systems.join(" · ")}</p></div><span>待開放</span></article>)}</section><div className="ending-actions"><button type="button" className="main-action" onClick={newLife}>出生在另一個家庭</button><button type="button" onClick={() => setMemoryOpen(true)}>翻開這一輪的記憶</button></div></div>, { wide: true, hideSignals: true });
 }
