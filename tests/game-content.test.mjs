@@ -19,14 +19,29 @@ async function sourceText(directory = "app") {
   return (await Promise.all(sourceFiles.map((file) => readFile(file, "utf8")))).join("\n");
 }
 
-test("implements a playable 0–18 vertical slice instead of a disease selector", async () => {
+test("implements a playable childhood without a disease selector", async () => {
   const page = await read("app/page.tsx");
-  for (const phrase of ["0 歲", "7 歲", "12 歲", "14 歲", "17 歲", "十八歲生日", "第一次門診"]) {
+  for (const phrase of ["0 歲", "7 歲", "12 歲", "14 歲", "17 歲", "13–18", "第一次門診"]) {
     assert.match(page, new RegExp(phrase));
   }
   assert.match(page, /沒有疾病選單/);
   assert.doesNotMatch(page, /選擇這一輪想體驗的路線/);
   assert.doesNotMatch(page, /StatPanel|feedbackCard|同理心\s*\+\s*10/);
+});
+
+test("continues the same playable life through adulthood, aging, and natural death", async () => {
+  const page = await read("app/page.tsx");
+  const adult = await read("app/game/components/AdultChapters.tsx");
+  for (const age of ["21 歲", "23 歲", "28 歲", "32 歲", "34 歲", "35 歲", "41 歲", "45 歲", "49 歲", "57 歲", "61 歲", "68 歲", "76 歲", "82 歲"]) {
+    assert.match(adult, new RegExp(age));
+  }
+  for (const phase of ["moving-out", "first-work", "relationship", "masking-work", "adult-clinic", "work-disclosure", "career-project", "caregiving", "system-dungeon", "group-chat", "aging", "memory-review", "last-day", "life-summary"]) {
+    assert.match(page + adult, new RegExp(phase));
+  }
+  assert.match(adult, /自然結束/);
+  assert.match(adult, /你的病歷記錄了很多事情/);
+  assert.match(adult, /沒有記錄全部的人生/);
+  assert.doesNotMatch(adult, /自殺結局|疾病失敗結局\s*：/);
 });
 
 test("keeps hidden multifactor traits, five family seeds, events, and long-term memory data", async () => {
@@ -59,6 +74,28 @@ test("turns inconvenience into mechanics and preserves accessibility", async () 
   assert.match(dialogue, /真正說出口/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(page, /降低干擾效果/);
+});
+
+test("adult inconvenience is played through rather than explained as a lesson", async () => {
+  const adult = await read("app/game/components/AdultChapters.tsx");
+  const data = await read("app/game/data/adultEvents.ts");
+  const stats = await read("app/game/engine/lifeStats.ts");
+  for (const mechanic of ["MOVE_ITEMS", "FIRST_WORK_TASKS", "MASKING_MOMENTS", "ADULT_CLINIC_TIMELINE", "SYSTEM_DUNGEON_TASKS", "GROUP_MESSAGES", "AGING_OBJECTS", "FINAL_DAY_ACTIONS"]) {
+    assert.match(adult + data, new RegExp(mechanic));
+  }
+  for (const counter of ["workedWhileExhausted", "maskedAtWork", "onTimeAppointments", "missedAppointments", "bureaucracyTrips", "lateNightJokes", "plantsKeptAlive"]) {
+    assert.match(stats, new RegExp(counter));
+  }
+  assert.doesNotMatch(adult, /善意歧視|你今天學會|同理心\s*\+/);
+});
+
+test("support group is a fictional living chat, not a crisis-support quiz", async () => {
+  const data = await read("app/game/data/adultEvents.ts");
+  for (const fictionalName of ["小葉", "米糕", "魚", "N", "阿鳥", "33", "藍莓"]) {
+    assert.match(data, new RegExp(fictionalName));
+  }
+  assert.match(data, /泡麵|貼圖|主管|晚餐/);
+  assert.doesNotMatch(data, /請選出.*正確|正確危機支持語句|答對/);
 });
 
 test("retains safety resources without turning crisis into an ending", async () => {

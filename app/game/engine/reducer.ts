@@ -49,6 +49,42 @@ function signalsForPhase(state: GameState, phase: GameState["phase"]) {
   if (phase === "clinic-trip" || phase === "clinic-room" || phase === "memory-return") {
     return { sleep: "五個小時", mind: "把話重新排一次", body: "餓了，也有點想吐", people: "候診室很多人", next: "下午還要回學校", unread: 21 };
   }
+  if (phase === "moving-out") {
+    return { sleep: "紙箱旁邊睡了五小時", mind: "什麼都怕忘", body: "手臂很痠", people: "家裡一直問帶齊了嗎", next: "17:00 前交屋", unread: 12 };
+  }
+  if (phase === "first-work") {
+    return { sleep: "六小時", mind: "記住每個人的名字", body: "站了七個小時", people: "同事在約下班吃飯", next: "明天 08:30 打卡", unread: 18 };
+  }
+  if (phase === "relationship") {
+    return { sleep: "昨晚一直看手機", mind: "同一句話讀了十次", body: "胃縮在一起", people: "阿沐還沒回覆", next: "決定要傳出哪一句", unread: 3 };
+  }
+  if (phase === "masking-work" || phase === "work-disclosure") {
+    return { sleep: "三小時四十分", mind: "維持普通表情", body: "咖啡壓著手抖", people: "主管今天會找你", next: "完成下午簡報", unread: 27 };
+  }
+  if (phase === "adult-clinic") {
+    return { sleep: "五小時", mind: "請假理由演練完畢", body: "餓，藥袋也快空了", people: "候診還有七號", next: "14:00 前回公司", unread: 31 };
+  }
+  if (phase === "career-project") {
+    return { sleep: "昨晚六個半小時", mind: "這份工作你真的會做", body: "肩頸很硬", people: "團隊在等你的決定", next: "週五前交付專案", unread: 22 };
+  }
+  if (phase === "caregiving") {
+    return { sleep: "被兩通電話叫醒", mind: "兩張掛號單疊在一起", body: "還沒吃早餐", people: "每個人都說只有那天有空", next: "安排明天的陪診", unread: 36 };
+  }
+  if (phase === "system-dungeon") {
+    return { sleep: "六小時", mind: "影本、正本、第二份正本", body: "排隊站到腰痠", people: "窗口說還少一張", next: "16:30 前回到一樓", unread: 19 };
+  }
+  if (phase === "group-chat") {
+    return { sleep: "群組聊到 01:24", mind: "不用每句都翻譯", body: "坐太久腳麻", people: "有人問晚餐吃了沒", next: "明天上班，真的要睡", unread: 48 };
+  }
+  if (phase === "adult-ordinary-day") {
+    return { sleep: "七小時，難得", mind: "今天還算安靜", body: "膝蓋有點痠", people: "朋友傳了貓的影片", next: "下班買豆花", unread: 9 };
+  }
+  if (phase === "aging" || phase === "memory-review") {
+    return { sleep: "半夜醒兩次", mind: "名字偶爾慢一拍", body: "走路要留一點時間", people: "群組有人換了第三次暱稱", next: "整理下週的藥盒", unread: 14 };
+  }
+  if (phase === "last-day") {
+    return { sleep: "午睡了一會", mind: "沒有急著解釋什麼", body: "今天走得比較慢", people: "晚安還沒傳", next: "替植物澆水", unread: 6 };
+  }
   return state.signals;
 }
 
@@ -56,10 +92,20 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case "NEW_LIFE":
       return createLife(action.seed, action.settings ?? state.settings);
-    case "HYDRATE":
-      return action.state.version === 2 ? action.state : state;
+    case "HYDRATE": {
+      if (action.state.version !== 2) return state;
+      const base = createLife(action.state.seed, action.state.settings);
+      return {
+        ...base,
+        ...action.state,
+        counters: { ...base.counters, ...action.state.counters },
+        adultActions: action.state.adultActions ?? [],
+        groupReplies: action.state.groupReplies ?? [],
+        chapterProgress: action.state.chapterProgress ?? 0,
+      };
+    }
     case "GO": {
-      const next = { ...state, phase: action.phase, age: action.age ?? state.age, lastText: action.text ?? state.lastText };
+      const next = { ...state, phase: action.phase, age: action.age ?? state.age, chapterProgress: action.phase === state.phase ? state.chapterProgress : 0, lastText: action.text ?? state.lastText };
       return { ...next, signals: signalsForPhase(next, action.phase) };
     }
     case "SET_SETTING": {
@@ -127,13 +173,37 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         traits: applyEffects(state.traits, action.effects),
         lastText: action.text,
       };
+    case "ADULT_ACTION": {
+      const flags = { ...state.flags };
+      action.flags?.forEach((flag) => { flags[flag] = true; });
+      return {
+        ...state,
+        flags,
+        adultActions: state.adultActions.includes(action.actionId) ? state.adultActions : [...state.adultActions, action.actionId],
+        traits: applyEffects(state.traits, action.effects),
+        counters: addCounters(state.counters, action.counters),
+        lastText: action.text,
+      };
+    }
+    case "GROUP_REPLY":
+      return {
+        ...state,
+        groupReplies: state.groupReplies.includes(action.replyId) ? state.groupReplies : [...state.groupReplies, action.replyId],
+        traits: applyEffects(state.traits, action.effects),
+        counters: addCounters(state.counters, action.counters),
+        lastText: action.text,
+      };
+    case "ADVANCE_PROGRESS":
+      return { ...state, chapterProgress: state.chapterProgress + 1, lastText: action.text };
+    case "RESET_PROGRESS":
+      return { ...state, chapterProgress: 0 };
     case "CLINIC_NEXT":
       return { ...state, clinicStep: state.clinicStep + 1, lastText: action.text };
     case "REINTERPRET_MEMORY":
       return {
         ...state,
         memories: state.memories.map((memory) => memory.id === action.memoryId
-          ? { ...memory, interpretation: action.interpretation, reinterpretAtAge: 17 }
+          ? { ...memory, interpretation: action.interpretation, reinterpretAtAge: action.age ?? 17 }
           : memory),
         lastText: action.interpretation,
       };

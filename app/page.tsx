@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { DialogueBox } from "./game/components/DialogueBox";
+import { AdultChapters } from "./game/components/AdultChapters";
 import { GameScene, type SceneObject } from "./game/components/GameScene";
 import { MemoryBook } from "./game/components/MemoryBook";
 import { PauseMenu } from "./game/components/PauseMenu";
 import { StatusSignals } from "./game/components/StatusSignals";
-import { CHILDHOOD_OBJECTS, CLINIC_TIMELINE, FUTURE_CHAPTERS, TEEN_EVENTS } from "./game/data/events";
+import { CHILDHOOD_OBJECTS, CLINIC_TIMELINE, TEEN_EVENTS } from "./game/data/events";
 import { getFamilySeed } from "./game/data/families";
 import { createHomeState, freshSeed } from "./game/engine/createGame";
 import { gameReducer } from "./game/engine/reducer";
@@ -18,7 +19,11 @@ const LIFE_STAGES = [
   ["0–5", ["notice", "birth"]],
   ["6–12", ["childhood-room", "family-talk", "school-morning"]],
   ["13–18", ["ordinary-day", "teen-event", "wrong-explanation", "counselor", "clinic-trip", "clinic-room", "memory-return"]],
-  ["19–25", []], ["26–35", []], ["36–50", []], ["51–65", []], ["65+", []],
+  ["19–25", ["moving-out", "first-work"]],
+  ["26–35", ["relationship", "masking-work", "adult-clinic", "work-disclosure"]],
+  ["36–50", ["career-project", "caregiving", "system-dungeon"]],
+  ["51–65", ["group-chat", "adult-ordinary-day"]],
+  ["65+", ["aging", "memory-review", "last-day", "life-summary"]],
 ] as const;
 
 const DISTRACTIONS = [
@@ -110,7 +115,7 @@ export default function Home() {
     return <main className="landing">
       <header className="landing-bar"><div className="logo-tile">回</div><p>人生模擬 × 養成 RPG × 敘事解謎</p><a href="#about">這是什麼</a></header>
       <section className="landing-hero">
-        <div className="landing-copy"><span className="tape-label">可遊玩章節 · 0–18 歲</span><h1>一生的<br /><em>回聲</em></h1><p>你不是要扮演一個精神疾病患者。你只是活著，後來才慢慢知道，原來有些事情別人不用這麼用力。</p><div className="landing-actions"><button type="button" className="main-action" onClick={newLife}>出生</button>{hasSave && <button type="button" onClick={resume}>回到上次停下的地方</button>}</div><small>一輪約 20–30 分鐘 · 沒有疾病選單 · 沒有好壞結局</small></div>
+        <div className="landing-copy"><span className="tape-label">完整人生篇章 · 0–82 歲</span><h1>一生的<br /><em>回聲</em></h1><p>你不是要扮演一個精神疾病患者。你只是活著，後來才慢慢知道，原來有些事情別人不用這麼用力。</p><div className="landing-actions"><button type="button" className="main-action" onClick={newLife}>出生</button>{hasSave && <button type="button" onClick={resume}>回到上次停下的地方</button>}</div><small>一輪約 45–70 分鐘 · 沒有疾病選單 · 沒有好壞結局</small></div>
         <div className="landing-room" aria-hidden="true"><div className="pixel-window"><i /><i /><i /></div><div className="room-lamp" /><div className="room-sofa" /><div className="room-table"><i /><b /></div><div className="tiny-person" /><span className="clock-card">02:13<br /><small>客廳還亮著</small></span><span className="receipt-card">○○身心○○<br />第 071 號</span><span className="note-card">不要跟老師說</span></div>
       </section>
       <section className="landing-about" id="about"><article><span>你會做的事</span><p>翻垃圾桶、找聯絡簿、忘記鑰匙、按三次才起床、在候診室看號碼，以及把想說的話刪掉。</p></article><article><span>這一輪不會告訴你</span><p>你「抽到」什麼病。家庭、睡眠、壓力、先天敏感與偶發事件會在看不見的地方互相影響。</p></article><article><span>資料界線</span><p>角色與事件皆為融合後重新創作；沒有真實群名、成員、病歷、原句或可辨識經歷。</p></article></section>
@@ -229,8 +234,8 @@ export default function Home() {
   if (state.phase === "memory-return") {
     const whiteBag = state.memories.find((memory) => memory.id === "white-bag");
     const interpreted = Boolean(whiteBag?.interpretation);
-    return shell(<><SceneHeading kicker="第六章 · 17 歲 · 醫院走廊" title="……我是不是看過這個？">不是跳出答案。是一個畫面先回來：凌晨、客廳、桌邊不能碰的袋子。</SceneHeading><div className="memory-replay"><article><span>7 歲</span><h2>{whiteBag?.titleAtTime ?? "白色袋子"}</h2><p>{whiteBag?.descriptionAtTime ?? "上面很多看不懂的字。"}</p></article><i aria-hidden="true">↔</i><article><span>17 歲</span><h2>手上的袋子</h2><p>同樣的紙、同樣的摺線。院徽像一個你差點想起的字。</p></article></div>{!interpreted ? <button type="button" className="main-action next-scene" onClick={() => dispatch({ type: "REINTERPRET_MEMORY", memoryId: "white-bag", interpretation: family.clinicInterpretation })}>讓記憶翻到背面</button> : <><div className="reinterpretation"><span>記憶碎片更新，但沒有全部解答</span><p>{whiteBag?.interpretation}</p><small>房門裡說過什麼、答錄機刪掉什麼，仍可能永遠不知道。</small></div><button type="button" className="main-action next-scene" onClick={() => go("slice-ending", 18)}>十八歲生日</button></>}</>);
+    return shell(<><SceneHeading kicker="第六章 · 17 歲 · 醫院走廊" title="……我是不是看過這個？">不是跳出答案。是一個畫面先回來：凌晨、客廳、桌邊不能碰的袋子。</SceneHeading><div className="memory-replay"><article><span>7 歲</span><h2>{whiteBag?.titleAtTime ?? "白色袋子"}</h2><p>{whiteBag?.descriptionAtTime ?? "上面很多看不懂的字。"}</p></article><i aria-hidden="true">↔</i><article><span>17 歲</span><h2>手上的袋子</h2><p>同樣的紙、同樣的摺線。院徽像一個你差點想起的字。</p></article></div>{!interpreted ? <button type="button" className="main-action next-scene" onClick={() => dispatch({ type: "REINTERPRET_MEMORY", memoryId: "white-bag", interpretation: family.clinicInterpretation })}>讓記憶翻到背面</button> : <><div className="reinterpretation"><span>記憶碎片更新，但沒有全部解答</span><p>{whiteBag?.interpretation}</p><small>房門裡說過什麼、答錄機刪掉什麼，仍可能永遠不知道。</small></div><button type="button" className="main-action next-scene" onClick={() => go("moving-out", 21)}>四年後，第一次離家</button></>}</>);
   }
 
-  return shell(<div className="slice-ending"><span className="tape-label">第一階段結束 · 18 歲</span><h1>你還不知道<br />這一生會叫什麼。</h1><p>你只知道：有些早晨，別人一個按鈕就能完成的事，你要按三次。有些話不是不知道，而是到嘴邊會變成別的話。</p><blockquote>病歷以後會記錄很多事情，但不會記錄全部的人生。</blockquote><section className="future-map"><header><span>這一生還會繼續</span><p>成年段已保留事件槽與長期旗標；下一階段會逐幕擴寫，不以摘要冒充遊戲。</p></header>{FUTURE_CHAPTERS.map((chapter) => <article key={chapter.age}><b>{chapter.age}</b><div><h2>{chapter.title}</h2><p>{chapter.systems.join(" · ")}</p></div><span>待開放</span></article>)}</section><div className="ending-actions"><button type="button" className="main-action" onClick={newLife}>出生在另一個家庭</button><button type="button" onClick={() => setMemoryOpen(true)}>翻開這一輪的記憶</button></div></div>, { wide: true, hideSignals: true });
+  return shell(<AdultChapters state={state} dispatch={dispatch} go={go} openMemory={() => setMemoryOpen(true)} newLife={newLife} />, { wide: true, hideSignals: state.phase === "life-summary" });
 }

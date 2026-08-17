@@ -12,7 +12,22 @@ export type Phase =
   | "clinic-trip"
   | "clinic-room"
   | "memory-return"
-  | "slice-ending";
+  | "slice-ending"
+  | "moving-out"
+  | "first-work"
+  | "relationship"
+  | "masking-work"
+  | "adult-clinic"
+  | "work-disclosure"
+  | "career-project"
+  | "caregiving"
+  | "system-dungeon"
+  | "group-chat"
+  | "adult-ordinary-day"
+  | "aging"
+  | "memory-review"
+  | "last-day"
+  | "life-summary";
 
 export type FamilySeedId = "unspoken" | "closed" | "warm" | "stretched" | "caregiving";
 export type TeenPattern = "surge" | "low" | "perception" | "alarm";
@@ -45,6 +60,19 @@ export type LifeCounters = {
   ordinaryDays: number;
   laughedHard: number;
   goodFood: number;
+  workedWhileExhausted: number;
+  cancelledPlans: number;
+  onTimeAppointments: number;
+  missedAppointments: number;
+  maskedAtWork: number;
+  projectsCompleted: number;
+  peopleBelieved: number;
+  hospitalTrips: number;
+  caregivingTrips: number;
+  bureaucracyTrips: number;
+  lateNightJokes: number;
+  plantsKeptAlive: number;
+  groupMessages: number;
 };
 
 export type MemoryFragment = {
@@ -98,6 +126,9 @@ export type GameState = {
   settings: AccessibilitySettings;
   morning: MorningState;
   teenActions: string[];
+  adultActions: string[];
+  groupReplies: string[];
+  chapterProgress: number;
   clinicStep: number;
   lastText: string;
 };
@@ -135,7 +166,11 @@ export type GameAction =
   | { type: "ADD_DISTRACTION"; distractionId: string }
   | { type: "CLEAR_DISTRACTIONS" }
   | { type: "TEEN_ACTION"; actionId: string; effects?: HiddenEffect; text: string }
+  | { type: "ADULT_ACTION"; actionId: string; effects?: HiddenEffect; flags?: string[]; counters?: Partial<LifeCounters>; text: string }
+  | { type: "GROUP_REPLY"; replyId: string; effects?: HiddenEffect; counters?: Partial<LifeCounters>; text: string }
+  | { type: "ADVANCE_PROGRESS"; text: string }
+  | { type: "RESET_PROGRESS" }
   | { type: "CLINIC_NEXT"; text: string }
-  | { type: "REINTERPRET_MEMORY"; memoryId: string; interpretation: string }
+  | { type: "REINTERPRET_MEMORY"; memoryId: string; interpretation: string; age?: number }
   | { type: "UNLOCK_MEMORY"; memoryId: string }
   | { type: "SET_TEXT"; text: string };
