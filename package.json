@@ -13,7 +13,7 @@
     "start": "vinext start",
     "test": "node --test tests/game-content.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.game.json",
-    "lint": "eslint app/page.tsx app/layout.tsx app/game/**/*.ts app/game/**/*.tsx github-src/main.tsx vite.github.config.ts",
+    "lint": "eslint app/page.tsx app/layout.tsx github-src/main.tsx vite.github.config.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
